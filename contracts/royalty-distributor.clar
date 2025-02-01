@@ -3,6 +3,8 @@
 (define-constant err-invalid-percentage (err u101))
 (define-constant err-no-song (err u102))
 (define-constant err-already-registered (err u103))
+(define-constant err-no-nft (err u104))
+(define-constant err-invalid-nft-owner (err u105))
 
 ;; Data variables
 (define-data-var contract-owner principal tx-sender)
@@ -17,13 +19,23 @@
         artist-share: uint,
         producer-share: uint,
         label-share: uint,
-        total-earnings: uint
+        total-earnings: uint,
+        nft-id: (optional uint)
     }
 )
 
 (define-map royalty-payments
     { song-id: uint, recipient: principal }
     { amount: uint }
+)
+
+(define-map song-nfts
+    { nft-id: uint }
+    {
+        song-id: uint,
+        owner: principal,
+        metadata-uri: (string-ascii 256)
+    }
 )
 
 ;; Register a new song with royalty splits
@@ -50,8 +62,50 @@
                 artist-share: artist-share,
                 producer-share: producer-share,
                 label-share: label-share,
-                total-earnings: u0
+                total-earnings: u0,
+                nft-id: none
             }))
+    )
+)
+
+;; Mint NFT for a song
+(define-public (mint-song-nft 
+    (song-id uint) 
+    (nft-id uint)
+    (metadata-uri (string-ascii 256)))
+    
+    (let ((song-data (unwrap! (map-get? songs {song-id: song-id}) err-no-song)))
+        (asserts! (is-eq tx-sender (get artist song-data)) err-unauthorized)
+        (asserts! (is-none (get nft-id song-data)) err-already-registered)
+        
+        ;; Create NFT record
+        (map-set song-nfts
+            {nft-id: nft-id}
+            {
+                song-id: song-id,
+                owner: tx-sender,
+                metadata-uri: metadata-uri
+            }
+        )
+        
+        ;; Update song with NFT reference
+        (ok (map-set songs
+            {song-id: song-id}
+            (merge song-data {nft-id: (some nft-id)})))
+    )
+)
+
+;; Transfer NFT ownership
+(define-public (transfer-nft
+    (nft-id uint)
+    (recipient principal))
+    
+    (let ((nft-data (unwrap! (map-get? song-nfts {nft-id: nft-id}) err-no-nft)))
+        (asserts! (is-eq tx-sender (get owner nft-data)) err-invalid-nft-owner)
+        
+        (ok (map-set song-nfts
+            {nft-id: nft-id}
+            (merge nft-data {owner: recipient})))
     )
 )
 
@@ -89,6 +143,11 @@
 ;; Get song details
 (define-read-only (get-song-details (song-id uint))
     (ok (map-get? songs {song-id: song-id}))
+)
+
+;; Get NFT details
+(define-read-only (get-nft-details (nft-id uint))
+    (ok (map-get? song-nfts {nft-id: nft-id}))
 )
 
 ;; Get royalty payment for a recipient
